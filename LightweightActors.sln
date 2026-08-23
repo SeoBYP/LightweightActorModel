@@ -1,0 +1,28 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LightweightActors", "LightweightActors\LightweightActors.csproj", "{B6B11489-CFCF-4DC9-8AA8-6025E60FFF08}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LightweightActors.Tests", "LightweightActors.Tests\LightweightActors.Tests.csproj", "{80CAA052-F518-4D1D-951A-A67CFE9D4119}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LightweightActors.Samples", "LightweightActors.Samples\LightweightActors.Samples.csproj", "{875A2FA3-A06B-4B6A-A057-CD30BD03A23C}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{B6B11489-CFCF-4DC9-8AA8-6025E60FFF08}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B6B11489-CFCF-4DC9-8AA8-6025E60FFF08}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B6B11489-CFCF-4DC9-8AA8-6025E60FFF08}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B6B11489-CFCF-4DC9-8AA8-6025E60FFF08}.Release|Any CPU.Build.0 = Release|Any CPU
+		{80CAA052-F518-4D1D-951A-A67CFE9D4119}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{80CAA052-F518-4D1D-951A-A67CFE9D4119}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{80CAA052-F518-4D1D-951A-A67CFE9D4119}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{80CAA052-F518-4D1D-951A-A67CFE9D4119}.Release|Any CPU.Build.0 = Release|Any CPU
+		{875A2FA3-A06B-4B6A-A057-CD30BD03A23C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{875A2FA3-A06B-4B6A-A057-CD30BD03A23C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{875A2FA3-A06B-4B6A-A057-CD30BD03A23C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{875A2FA3-A06B-4B6A-A057-CD30BD03A23C}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal
