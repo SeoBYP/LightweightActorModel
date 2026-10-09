@@ -170,62 +170,65 @@ public class JobDispatcherTests
     [Fact]
     public void 새_디스패처는_Active_상태다()
     {
-        // Given
+        // given
         JobDispatcher dispatcher = new();
         
-        // When & Then
+        // when & Then
         Assert.Equal(ActorState.Active, dispatcher.State);
     }
 
     [Fact]
-    public void 대기중인_메시지가_없을때_닫기를_요청하면_Closed가_된다()
+    public async Task 대기중인_메시지가_없을때_닫기를_요청하면_Closed가_된다()
     {
-        // Given
+        // given
         JobDispatcher dispatcher = new();
         
-        // When
+        // when
         dispatcher.RequestClose();
         
-        // Then
+        // then
         Assert.Equal(0, dispatcher.PendingCount);
+        await dispatcher.Closed.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(ActorState.Closed, dispatcher.State);
     }
 
     [Fact]
     public async Task 메시지를_모두_처리한_후_닫기를_요청하면_Closed가_된다()
     {
-        // Given
+        // given
         JobDispatcher dispatcher = new();
         var processed = new ConcurrentQueue<int>();
 
-        // When
+        // when
         var tasks = Enumerable.Range(0, 100)
             .Select(i => dispatcher.Post(() => processed.Enqueue(i)))
             .ToArray();
         
         await Task.WhenAll(tasks);
         
-        // Then
+        // then
         Assert.Equal(0, dispatcher.PendingCount);
         Assert.Equal(100, processed.Count);
         Assert.Equal(ActorState.Active, dispatcher.State);
         
         // 작업을 끝낸 다음에 RequestClose를 호출하면 Closed가 된다.
         dispatcher.RequestClose();
+        await dispatcher.Closed.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(ActorState.Closed, dispatcher.State);
     }
     
     [Fact]
-    public void 닫기를_두번_요청해도_예외없이_Closed를_유지한다()
+    public async Task 닫기를_두번_요청해도_예외없이_Closed를_유지한다()
     {
-        // Given
+        // given
         JobDispatcher dispatcher = new();
         
-        // When
+        // when
         dispatcher.RequestClose();
         dispatcher.RequestClose();
         
-        // Then
+        // then
+        await dispatcher.Closed.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(ActorState.Closed, dispatcher.State);
         Assert.Equal(0, dispatcher.PendingCount);
     }
@@ -234,27 +237,27 @@ public class JobDispatcherTests
     [Fact]
     public async Task Closed_상태에서_Post하면_거절된다()
     {
-        // Given
+        // given
         JobDispatcher dispatcher = new();
         
-        // When
+        // when
         dispatcher.RequestClose();
         
-        // Then
+        // then
         await Assert.ThrowsAsync<InvalidOperationException>(() => dispatcher.Post(() => { }));
     }
 
     [Fact]
     public async Task Closed_상태에서_Post한_액션은_실행되지_않는다()
     {
-        // Given
+        // given
         JobDispatcher dispatcher = new();
         var processed = new ConcurrentQueue<int>();
         
-        // When
+        // when
         dispatcher.RequestClose();
         
-        // Then
+        // then
         await Assert.ThrowsAsync<InvalidOperationException>(() => 
             dispatcher.Post(() => processed.Enqueue(1)));
         Assert.Empty(processed);
@@ -264,13 +267,13 @@ public class JobDispatcherTests
     [Fact]
     public async Task Closing_상태에서_Post하면_거절된다()
     {
-        // Given
+        // given
         JobDispatcher dispatcher = new();
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var first  = dispatcher.Post(async () => await release.Task);
         dispatcher.RequestClose();
         
-        // When & Then
+        // when & Then
         Assert.Equal(ActorState.Closing, dispatcher.State);
         await Assert.ThrowsAsync<InvalidOperationException>(() => dispatcher.Post(() => { }));
         
@@ -282,7 +285,7 @@ public class JobDispatcherTests
     [Fact]
     public async Task 실행중에_닫기를_요청하면_끝날때까지_Closing을_유지한다()
     {
-        // Given
+        // given
         JobDispatcher dispatcher = new();
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var first  = dispatcher.Post(async () => await release.Task);
@@ -290,27 +293,97 @@ public class JobDispatcherTests
         
         Assert.Equal(ActorState.Closing, dispatcher.State);
 
-        // When
+        // when
         release.SetResult();
         await first.WaitAsync(TimeSpan.FromSeconds(5));
         
-        // Then
+        // then
+        await dispatcher.Closed.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(ActorState.Closed, dispatcher.State);
     }
 
     [Fact]
     public async Task 닫기_요청_전에_들어온_메시지는_모두_순서대로_처리된다()
     {
+        // given
+        var dispatcher = new JobDispatcher();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var processed = new ConcurrentQueue<int>();
+  
+        var first  = dispatcher.Post(async () =>
+        {
+            processed.Enqueue(0);
+            await release.Task;
+        });
+        var second = dispatcher.Post(() => processed.Enqueue(1));
+        var third = dispatcher.Post(() => processed.Enqueue(2));
+        dispatcher.RequestClose();
+        Assert.Equal(ActorState.Closing, dispatcher.State);
+        
+        // when
+        release.SetResult();
+        await Task.WhenAll(first, second, third).WaitAsync(TimeSpan.FromSeconds(5));
+        
+        // then
+        Assert.Equal(Enumerable.Range(0, 3), processed);
+        await dispatcher.Closed.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(ActorState.Closed, dispatcher.State);
     }
 
     [Fact]
-    public async Task 마지막_메시지가_완료된_후에_Completion이_완료된다()
+    public async Task 마지막_메시지가_완료된_후에_Closed가_완료된다()
     {
+        // given
+        var dispatcher = new JobDispatcher();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var first = dispatcher.Post(async () =>
+        {
+            await release.Task;
+        });
+        dispatcher.RequestClose();
+        
+        Assert.Equal(ActorState.Closing, dispatcher.State);
+        Assert.False(dispatcher.Closed.IsCompleted);
+        
+        // when
+        release.SetResult();
+        
+        // then
+        await dispatcher.Closed.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(first.IsCompleted);
+        Assert.Equal(ActorState.Closed, dispatcher.State);
     }
 
     [Fact]
     public async Task Closing중_처리되는_메시지가_예외를_던져도_Closed에_도달한다()
     {
+        // given
+        var dispatcher = new JobDispatcher();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var processed = new ConcurrentQueue<int>();
+        
+      
+        var first = dispatcher.Post(async () =>
+        {
+            processed.Enqueue(0);
+            await release.Task;
+            throw new ApplicationException("Boom");
+        });
+        dispatcher.RequestClose();
+        Assert.Equal(ActorState.Closing, dispatcher.State);
+        
+        // when
+        release.SetResult();
+        
+        // then
+        ApplicationException exception = await Assert.ThrowsAsync<ApplicationException>(() => first)
+            .WaitAsync(TimeSpan.FromSeconds(5));
+        
+        Assert.Equal("Boom", exception.Message);
+        Assert.Equal(Enumerable.Range(0, 1), processed);
+        await dispatcher.Closed.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(ActorState.Closed, dispatcher.State);
     }
 
     // 4단계: 동시성 (스트레스 테스트)
@@ -320,7 +393,7 @@ public class JobDispatcherTests
     }
 
     [Fact]
-    public async Task 여러_스레드가_동시에_닫기를_요청해도_Completion은_한번만_완료된다()
+    public async Task 여러_스레드가_동시에_닫기를_요청해도_Closed는_한번만_완료된다()
     {
     }
 

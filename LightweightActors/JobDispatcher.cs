@@ -22,6 +22,9 @@ public class JobDispatcher
 
     private long _lifecycle;
     
+    // 이 디스패쳐가 종료되었는지 나타내는 값
+    public Task Closed => _closed.Task;
+    
     public int PendingCount => (int)(Volatile.Read(ref _lifecycle) & MessageCountMask);
 
     public ActorState State
@@ -35,7 +38,10 @@ public class JobDispatcher
         }
     }
 
+
     public static JobDispatcher? Current => CurrentDispatcher.Value;
+    
+    
     
     public Task Post(Action action)
     {
@@ -163,7 +169,7 @@ public class JobDispatcher
         {
             if ((after & ClosingFlag) != 0)
             {
-                TryMaskClosed();
+                TryMarkClosed();
             }
             DeactivateOrReschedule();
         }
@@ -196,14 +202,14 @@ public class JobDispatcher
             {
                 if ((closing & MessageCountMask) == 0)
                 {
-                    TryMaskClosed();
+                    TryMarkClosed();
                 }
                 return;
             }
         }
     }
 
-    private void TryMaskClosed()
+    private void TryMarkClosed()
     {
         if (Interlocked.CompareExchange(ref _lifecycle, ClosedFlag, ClosingFlag) == ClosingFlag)
         {
