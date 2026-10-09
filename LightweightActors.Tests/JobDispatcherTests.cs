@@ -5,18 +5,327 @@ namespace LightweightActors.Tests;
 public class JobDispatcherTests
 {
     [Fact]
-    public async Task Message_AreProcessed_InPostingOrder()
+    public async Task 메시지는_Post한_순서대로_처리된다()
     {
         var dispatcher = new JobDispatcher();
         var processed = new ConcurrentQueue<int>();
-        
+
         Task[] completions = Enumerable.Range(0, 100)
             .Select(i => dispatcher.Post(() => processed.Enqueue(i)))
             .ToArray();
-        
+
         await Task.WhenAll(completions);
-        
+
         Assert.Equal(Enumerable.Range(0, 100), processed);
         Assert.Equal(0, dispatcher.PendingCount);
+    }
+
+    [Fact]
+    public async Task 비동기_메시지가_끝날때까지_같은_디스패처의_다음_메시지는_대기한다()
+    {
+        var dispatcher = new JobDispatcher();
+        var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        bool secondStarted = false;
+
+        Task first = dispatcher.Post(async () =>
+        {
+            firstStarted.SetResult();
+            await releaseFirst.Task;
+        });
+
+        Task second = dispatcher.Post(() => secondStarted = true);
+
+        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(secondStarted);
+
+        releaseFirst.SetResult();
+        await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(secondStarted);
+    }
+
+    [Fact]
+    public async Task 한_디스패처가_await중이어도_다른_디스패처는_막히지_않는다()
+    {
+        var firstDispatcher = new JobDispatcher();
+        var secondDispatcher = new JobDispatcher();
+
+        var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondRun = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var first = firstDispatcher.Post(() => releaseFirst.Task);
+        var second = secondDispatcher.Post(secondRun.SetResult);
+
+        await secondRun.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        releaseFirst.SetResult();
+        await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task 메시지에서_예외가_나도_Task로_전달되고_다음_메시지는_계속_처리된다()
+    {
+        var dispatcher = new JobDispatcher();
+        bool laterMessageRun = false;
+
+        Task failed = dispatcher.Post(() => throw new InvalidOperationException("Boom"));
+        Task later = dispatcher.Post(() => laterMessageRun = true);
+
+        InvalidOperationException exception = await Assert.ThrowsAsync<InvalidOperationException>(() => failed);
+        await later.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal("Boom", exception.Message);
+        Assert.True(laterMessageRun);
+    }
+
+    [Fact]
+    public async Task Current_디스패처는_await_이후에도_유지된다()
+    {
+        var dispatcher = new JobDispatcher();
+        JobDispatcher? beforeAwait = null;
+        JobDispatcher? afterAwait = null;
+
+        await dispatcher.Post(async () =>
+        {
+            beforeAwait = JobDispatcher.Current;
+            await Task.Yield();
+            afterAwait = JobDispatcher.Current;
+        }).WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Same(dispatcher, beforeAwait);
+        Assert.Same(dispatcher, afterAwait);
+        Assert.Null(JobDispatcher.Current);
+    }
+
+    [Fact]
+    public async Task 여러_생산자가_동시에_Post해도_메시지가_유실되지_않는다()
+    {
+        var dispatcher = new JobDispatcher();
+        int value = 0;
+
+        Task<Task[]>[] proceduers = Enumerable.Range(0, 8).Select(_ => Task.Run(() => Enumerable.Range(0, 250)
+            .Select(_ => dispatcher.Post(() => value++)).ToArray())).ToArray();
+
+        Task[][] batches = await Task.WhenAll(proceduers);
+        Task allMessage = Task.WhenAll(batches.SelectMany(x => x));
+        await allMessage.WaitAsync(TimeSpan.FromSeconds(5));
+
+        await Task.WhenAll(proceduers).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(2000, value);
+        Assert.Equal(0, dispatcher.PendingCount);
+
+        // 클로저 객체 예시
+        // Closure closure = new()
+        // {
+        //     Values = new(),
+        //     Value = 42
+        // };
+
+        // 이러면 State에서 values에 대한 참조는 하지만 클로저 객체가 추가 할당이 되는 것을 막을 수 있다
+        List<int> values = new();
+        await dispatcher.Post((values: values, value: 42),
+            static state => state.values.Add(state.value));
+    }
+
+    [Fact]
+    public async Task State_오버로드는_클로저_캡처없이_실행된다()
+    {
+        var dispatcher = new JobDispatcher();
+        var values = new List<int>();
+
+        await dispatcher.Post(
+                (values: values, value: 42),
+                static state => state.values.Add(state.value))
+            .WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal([42], values);
+    }
+
+    [Fact]
+    public async Task 비동기_State_오버로드는_완료될때까지_다음_메시지를_막는다()
+    {
+        var dispatcher = new JobDispatcher();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var values = new List<int>();
+
+        Task first = dispatcher.Post((values, release: release.Task),
+            static async state =>
+            {
+                await state.release;
+                state.values.Add(1);
+            });
+
+        Task second = dispatcher.Post(
+            values,
+            static state => state.Add(2));
+
+        Assert.Empty(values);
+        release.SetResult();
+        await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal([1, 2], values);
+    }
+
+    // 1단계: 상태 전환의 기본
+    [Fact]
+    public void 새_디스패처는_Active_상태다()
+    {
+        // Given
+        JobDispatcher dispatcher = new();
+        
+        // When & Then
+        Assert.Equal(ActorState.Active, dispatcher.State);
+    }
+
+    [Fact]
+    public void 대기중인_메시지가_없을때_닫기를_요청하면_Closed가_된다()
+    {
+        // Given
+        JobDispatcher dispatcher = new();
+        
+        // When
+        dispatcher.RequestClose();
+        
+        // Then
+        Assert.Equal(0, dispatcher.PendingCount);
+        Assert.Equal(ActorState.Closed, dispatcher.State);
+    }
+
+    [Fact]
+    public async Task 메시지를_모두_처리한_후_닫기를_요청하면_Closed가_된다()
+    {
+        // Given
+        JobDispatcher dispatcher = new();
+        var processed = new ConcurrentQueue<int>();
+
+        // When
+        var tasks = Enumerable.Range(0, 100)
+            .Select(i => dispatcher.Post(() => processed.Enqueue(i)))
+            .ToArray();
+        
+        await Task.WhenAll(tasks);
+        
+        // Then
+        Assert.Equal(0, dispatcher.PendingCount);
+        Assert.Equal(100, processed.Count);
+        Assert.Equal(ActorState.Active, dispatcher.State);
+        
+        // 작업을 끝낸 다음에 RequestClose를 호출하면 Closed가 된다.
+        dispatcher.RequestClose();
+        Assert.Equal(ActorState.Closed, dispatcher.State);
+    }
+    
+    [Fact]
+    public void 닫기를_두번_요청해도_예외없이_Closed를_유지한다()
+    {
+        // Given
+        JobDispatcher dispatcher = new();
+        
+        // When
+        dispatcher.RequestClose();
+        dispatcher.RequestClose();
+        
+        // Then
+        Assert.Equal(ActorState.Closed, dispatcher.State);
+        Assert.Equal(0, dispatcher.PendingCount);
+    }
+
+    // 2단계: 새 요청 거절
+    [Fact]
+    public async Task Closed_상태에서_Post하면_거절된다()
+    {
+        // Given
+        JobDispatcher dispatcher = new();
+        
+        // When
+        dispatcher.RequestClose();
+        
+        // Then
+        await Assert.ThrowsAsync<InvalidOperationException>(() => dispatcher.Post(() => { }));
+    }
+
+    [Fact]
+    public async Task Closed_상태에서_Post한_액션은_실행되지_않는다()
+    {
+        // Given
+        JobDispatcher dispatcher = new();
+        var processed = new ConcurrentQueue<int>();
+        
+        // When
+        dispatcher.RequestClose();
+        
+        // Then
+        await Assert.ThrowsAsync<InvalidOperationException>(() => 
+            dispatcher.Post(() => processed.Enqueue(1)));
+        Assert.Empty(processed);
+        Assert.Equal(ActorState.Closed, dispatcher.State);
+    }
+
+    [Fact]
+    public async Task Closing_상태에서_Post하면_거절된다()
+    {
+        // Given
+        JobDispatcher dispatcher = new();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var first  = dispatcher.Post(async () => await release.Task);
+        dispatcher.RequestClose();
+        
+        // When & Then
+        Assert.Equal(ActorState.Closing, dispatcher.State);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => dispatcher.Post(() => { }));
+        
+        release.SetResult();
+        await first.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    // 3단계: 남은 메시지 마저 처리 (graceful drain)
+    [Fact]
+    public async Task 실행중에_닫기를_요청하면_끝날때까지_Closing을_유지한다()
+    {
+        // Given
+        JobDispatcher dispatcher = new();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var first  = dispatcher.Post(async () => await release.Task);
+        dispatcher.RequestClose();
+        
+        Assert.Equal(ActorState.Closing, dispatcher.State);
+
+        // When
+        release.SetResult();
+        await first.WaitAsync(TimeSpan.FromSeconds(5));
+        
+        // Then
+        Assert.Equal(ActorState.Closed, dispatcher.State);
+    }
+
+    [Fact]
+    public async Task 닫기_요청_전에_들어온_메시지는_모두_순서대로_처리된다()
+    {
+    }
+
+    [Fact]
+    public async Task 마지막_메시지가_완료된_후에_Completion이_완료된다()
+    {
+    }
+
+    [Fact]
+    public async Task Closing중_처리되는_메시지가_예외를_던져도_Closed에_도달한다()
+    {
+    }
+
+    // 4단계: 동시성 (스트레스 테스트)
+    [Fact]
+    public async Task Post와_닫기가_동시에_일어나도_대기상태로_남는_Task가_없다()
+    {
+    }
+
+    [Fact]
+    public async Task 여러_스레드가_동시에_닫기를_요청해도_Completion은_한번만_완료된다()
+    {
+    }
+
+    [Fact]
+    public async Task Closed_이후에는_PendingCount가_0이다()
+    {
     }
 }
