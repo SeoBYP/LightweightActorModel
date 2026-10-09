@@ -22,7 +22,7 @@ public class JobDispatcher
 
     private long _lifecycle;
     
-    // 이 디스패쳐가 종료되었는지 나타내는 값
+    // 닫기 요청 후 남은 메시지까지 처리되어 Closed가 되면 완료되는 알림
     public Task Closed => _closed.Task;
     
     public int PendingCount => (int)(Volatile.Read(ref _lifecycle) & MessageCountMask);
@@ -69,6 +69,7 @@ public class JobDispatcher
 
     private Task Enqueue(IMessage message)
     {
+        
         while (true)
         {
             long current = Volatile.Read(ref _lifecycle);

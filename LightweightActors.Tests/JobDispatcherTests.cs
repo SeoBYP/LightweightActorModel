@@ -172,7 +172,7 @@ public class JobDispatcherTests
     {
         // given
         JobDispatcher dispatcher = new();
-        
+
         // when & Then
         Assert.Equal(ActorState.Active, dispatcher.State);
     }
@@ -182,10 +182,10 @@ public class JobDispatcherTests
     {
         // given
         JobDispatcher dispatcher = new();
-        
+
         // when
         dispatcher.RequestClose();
-        
+
         // then
         Assert.Equal(0, dispatcher.PendingCount);
         await dispatcher.Closed.WaitAsync(TimeSpan.FromSeconds(5));
@@ -203,30 +203,30 @@ public class JobDispatcherTests
         var tasks = Enumerable.Range(0, 100)
             .Select(i => dispatcher.Post(() => processed.Enqueue(i)))
             .ToArray();
-        
+
         await Task.WhenAll(tasks);
-        
+
         // then
         Assert.Equal(0, dispatcher.PendingCount);
         Assert.Equal(100, processed.Count);
         Assert.Equal(ActorState.Active, dispatcher.State);
-        
+
         // 작업을 끝낸 다음에 RequestClose를 호출하면 Closed가 된다.
         dispatcher.RequestClose();
         await dispatcher.Closed.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(ActorState.Closed, dispatcher.State);
     }
-    
+
     [Fact]
     public async Task 닫기를_두번_요청해도_예외없이_Closed를_유지한다()
     {
         // given
         JobDispatcher dispatcher = new();
-        
+
         // when
         dispatcher.RequestClose();
         dispatcher.RequestClose();
-        
+
         // then
         await dispatcher.Closed.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(ActorState.Closed, dispatcher.State);
@@ -239,10 +239,10 @@ public class JobDispatcherTests
     {
         // given
         JobDispatcher dispatcher = new();
-        
+
         // when
         dispatcher.RequestClose();
-        
+
         // then
         await Assert.ThrowsAsync<InvalidOperationException>(() => dispatcher.Post(() => { }));
     }
@@ -253,12 +253,12 @@ public class JobDispatcherTests
         // given
         JobDispatcher dispatcher = new();
         var processed = new ConcurrentQueue<int>();
-        
+
         // when
         dispatcher.RequestClose();
-        
+
         // then
-        await Assert.ThrowsAsync<InvalidOperationException>(() => 
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
             dispatcher.Post(() => processed.Enqueue(1)));
         Assert.Empty(processed);
         Assert.Equal(ActorState.Closed, dispatcher.State);
@@ -270,13 +270,13 @@ public class JobDispatcherTests
         // given
         JobDispatcher dispatcher = new();
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var first  = dispatcher.Post(async () => await release.Task);
+        var first = dispatcher.Post(async () => await release.Task);
         dispatcher.RequestClose();
-        
+
         // when & Then
         Assert.Equal(ActorState.Closing, dispatcher.State);
         await Assert.ThrowsAsync<InvalidOperationException>(() => dispatcher.Post(() => { }));
-        
+
         release.SetResult();
         await first.WaitAsync(TimeSpan.FromSeconds(5));
     }
@@ -288,15 +288,15 @@ public class JobDispatcherTests
         // given
         JobDispatcher dispatcher = new();
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var first  = dispatcher.Post(async () => await release.Task);
+        var first = dispatcher.Post(async () => await release.Task);
         dispatcher.RequestClose();
-        
+
         Assert.Equal(ActorState.Closing, dispatcher.State);
 
         // when
         release.SetResult();
         await first.WaitAsync(TimeSpan.FromSeconds(5));
-        
+
         // then
         await dispatcher.Closed.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(ActorState.Closed, dispatcher.State);
@@ -309,8 +309,8 @@ public class JobDispatcherTests
         var dispatcher = new JobDispatcher();
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var processed = new ConcurrentQueue<int>();
-  
-        var first  = dispatcher.Post(async () =>
+
+        var first = dispatcher.Post(async () =>
         {
             processed.Enqueue(0);
             await release.Task;
@@ -319,11 +319,11 @@ public class JobDispatcherTests
         var third = dispatcher.Post(() => processed.Enqueue(2));
         dispatcher.RequestClose();
         Assert.Equal(ActorState.Closing, dispatcher.State);
-        
+
         // when
         release.SetResult();
         await Task.WhenAll(first, second, third).WaitAsync(TimeSpan.FromSeconds(5));
-        
+
         // then
         Assert.Equal(Enumerable.Range(0, 3), processed);
         await dispatcher.Closed.WaitAsync(TimeSpan.FromSeconds(5));
@@ -337,18 +337,15 @@ public class JobDispatcherTests
         var dispatcher = new JobDispatcher();
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        var first = dispatcher.Post(async () =>
-        {
-            await release.Task;
-        });
+        var first = dispatcher.Post(async () => { await release.Task; });
         dispatcher.RequestClose();
-        
+
         Assert.Equal(ActorState.Closing, dispatcher.State);
         Assert.False(dispatcher.Closed.IsCompleted);
-        
+
         // when
         release.SetResult();
-        
+
         // then
         await dispatcher.Closed.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.True(first.IsCompleted);
@@ -362,8 +359,8 @@ public class JobDispatcherTests
         var dispatcher = new JobDispatcher();
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var processed = new ConcurrentQueue<int>();
-        
-      
+
+
         var first = dispatcher.Post(async () =>
         {
             processed.Enqueue(0);
@@ -372,14 +369,14 @@ public class JobDispatcherTests
         });
         dispatcher.RequestClose();
         Assert.Equal(ActorState.Closing, dispatcher.State);
-        
+
         // when
         release.SetResult();
-        
+
         // then
         ApplicationException exception = await Assert.ThrowsAsync<ApplicationException>(() => first)
             .WaitAsync(TimeSpan.FromSeconds(5));
-        
+
         Assert.Equal("Boom", exception.Message);
         Assert.Equal(Enumerable.Range(0, 1), processed);
         await dispatcher.Closed.WaitAsync(TimeSpan.FromSeconds(5));
@@ -390,11 +387,75 @@ public class JobDispatcherTests
     [Fact]
     public async Task Post와_닫기가_동시에_일어나도_대기상태로_남는_Task가_없다()
     {
+        for (int round = 0; round < 200; round++)
+        {
+            // given
+            var dispatcher = new JobDispatcher();
+            var startGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var processed = new ConcurrentQueue<int>();
+            int late = 0;
+            
+            Action<int> onExecuted = i =>
+            {
+                if (dispatcher.State == ActorState.Closed)
+                    Interlocked.Increment(ref late);
+                processed.Enqueue(i);
+            };
+            
+            // 4개의 이상의 쓰레드가 각각의 작업을 처리할 수 있도록 ProduceUntilRejected 메서드를 병렬로 실행합니다.
+            var producers = Enumerable.Range(0, 4)
+                .Select(_ => Task.Run(() =>
+                    ProduceUntilRejected(dispatcher, startGate.Task, onExecuted)))
+                .ToArray();
+            var close = Task.Run(async () =>
+            {
+                await startGate.Task;
+                dispatcher.RequestClose();
+            });
+        
+            // when
+            startGate.SetResult();
+        
+            List<Task>[] perProducer = await Task.WhenAll(producers);    // 4명 각자의 접수 목록 4개
+            await close;
+
+            // then
+            var accepted = perProducer.SelectMany(list => list).ToList();
+            await Task.WhenAll(accepted ).WaitAsync(TimeSpan.FromSeconds(5));
+            await dispatcher.Closed.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(ActorState.Closed, dispatcher.State);
+            Assert.Equal(accepted.Count, processed.Count);
+            Assert.Equal(0, dispatcher.PendingCount);
+            Assert.True(late == 0, $"round {round}: Closed 이후 실행된 메시지 {late}개");
+        }
+
+        // 출발 신호를 기다렸다가, 거절될 때까지 Post하고, 수락된 Task 목록을 돌려준다
+        async Task<List<Task>> ProduceUntilRejected(JobDispatcher dispatcher, Task start, Action<int> onExecuted)
+        {
+            await start;
+
+            var accepted = new List<Task>();
+            for (int i = 0; i < 10_000; i++)
+            {
+                try
+                {
+                    var i1 = i;
+                    accepted.Add(dispatcher.Post(() => onExecuted(i1)));
+                }
+                catch (InvalidOperationException e)
+                {
+                    return accepted;
+                }
+            }
+
+            return accepted;
+        }
     }
 
     [Fact]
     public async Task 여러_스레드가_동시에_닫기를_요청해도_Closed는_한번만_완료된다()
     {
+        
     }
 
     [Fact]
