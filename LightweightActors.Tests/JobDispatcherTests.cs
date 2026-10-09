@@ -455,11 +455,25 @@ public class JobDispatcherTests
     [Fact]
     public async Task 여러_스레드가_동시에_닫기를_요청해도_Closed는_한번만_완료된다()
     {
-        
-    }
+        for (int round = 0; round < 200; round++)
+        {
+            // given
+            var dispatcher = new JobDispatcher();
+            var startGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var closes = Enumerable.Range(0, 8)
+                .Select(_ => Task.Run(async () =>
+                {
+                    await startGate.Task;
+                    dispatcher.RequestClose();
+                })).ToArray();
 
-    [Fact]
-    public async Task Closed_이후에는_PendingCount가_0이다()
-    {
+            // when
+            startGate.SetResult();
+            await Task.WhenAll(closes);
+            
+            // then
+            await dispatcher.Closed.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(ActorState.Closed, dispatcher.State);
+        }
     }
 }
